@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Paystack Prompt</title>
+  <style>
+    body {
+      font-family: monospace;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      margin: 0;
+      background: #f4f4f4;
+    }
+    .card {
+      background: #fff;
+      padding: 24px;
+      border: 1px solid #ccc;
+      width: 100%;
+      max-width: 320px;
+      box-sizing: border-box;
+    }
+    input, select, button {
+      width: 100%;
+      padding: 10px;
+      margin: 8px 0 16px;
+      font-family: inherit;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+    button {
+      background: #000;
+      color: #fff;
+      border: none;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    button:disabled {
+      background: #888;
+      cursor: not-allowed;
+    }
+    .status {
+      font-size: 13px;
+      margin-top: 10px;
+      word-break: break-word;
+      white-space: pre-line;
+    }
+    .badge {
+      font-size: 11px;
+      padding: 2px 4px;
+      border: 1px solid #000;
+      display: inline-block;
+      margin-bottom: 8px;
+    }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <h3 style="margin-top: 0;">Express Pay</h3>
+  <div id="carrierBadge" class="badge">Carrier: Auto-Detect</div>
+
+  <form id="payForm">
+    <label for="phone">Phone Number</label>
+    <input type="tel" id="phone" placeholder="07... or 01..." required autocomplete="tel" />
+
+    <label for="amount">Amount (KES)</label>
+    <input type="number" id="amount" placeholder="50" min="1" required />
+
+    <button type="submit" id="submitBtn">Send Prompt</button>
+  </form>
+
+  <div id="status" class="status"></div>
+</div>
+
+<script>
+  const phoneInput = document.getElementById('phone');
+  const amountInput = document.getElementById('amount');
+  const carrierBadge = document.getElementById('carrierBadge');
+  const form = document.getElementById('payForm');
+  const submitBtn = document.getElementById('submitBtn');
+  const statusDiv = document.getElementById('status');
+
+  const safaricomPattern = /^(?:\+?254|0)?(7(?:0[0-8]|1[0-9]|2[0-9]|4[0-3568]|5[789]|6[89]|9[0-9])|1(?:1[0-5]))\d{6}$/;
+  const airtelPattern = /^(?:\+?254|0)?(7(?:3[0-9]|5[0-6]|8[0-9])|1(?:0[0-2]|1[6-9]))\d{6}$/;
+
+  phoneInput.addEventListener('input', () => {
+    const val = phoneInput.value.replace(/\s+/g, '');
+    if (safaricomPattern.test(val)) {
+      carrierBadge.innerText = 'Carrier: Safaricom (M-Pesa)';
+    } else if (airtelPattern.test(val)) {
+      carrierBadge.innerText = 'Carrier: Airtel Money';
+    } else {
+      carrierBadge.innerText = 'Carrier: Auto-Detect';
+    }
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    submitBtn.disabled = true;
+    statusDiv.innerText = 'Initializing payment prompt...';
+
+    try {
+      const response = await fetch('/api/charge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: phoneInput.value,
+          amount: amountInput.value
+        })
+      });
+
+      const result = await response.json();
+
+      if (!response.ok || !result.status) {
+        throw new Error(result.error || result.message || 'Payment initiation failed');
+      }
+
+      const carrierName = result.provider === 'mpesa' ? 'Safaricom M-Pesa' : 'Airtel Money';
+      statusDiv.innerText = `Prompt sent via ${carrierName}!\nEnter PIN on your handset...`;
+
+      pollPayment(result.data.reference);
+    } catch (err) {
+      statusDiv.innerText = `Error: ${err.message}`;
+      submitBtn.disabled = false;
+    }
+  });
+
+  function pollPayment(reference) {
+    let elapsedSeconds = 0;
+    const interval = setInterval(async () => {
+      elapsedSeconds += 3;
+
+      if (elapsedSeconds > 60) {
+        clearInterval(interval);
+        statusDiv.innerText = 'Payment timed out or expired.';
+        submitBtn.disabled = false;
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/verify/${encodeURIComponent(reference)}`);
+        const json = await res.json();
+        const txStatus = json.data?.status;
+
+        if (txStatus === 'success') {
+          clearInterval(interval);
+          statusDiv.innerText = 'Payment confirmed successfully!';
+          submitBtn.disabled = false;
+        } else if (txStatus === 'failed') {
+          clearInterval(interval);
+          statusDiv.innerText = `Payment failed: ${json.data?.gateway_response || 'Rejected'}`;
+          submitBtn.disabled = false;
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }, 3000);
+  }
+</script>
+
+</body>
+</html>
